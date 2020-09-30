@@ -7,6 +7,11 @@
 # The database file(s) are stored in a global variable.
 $tables = {}
 
+# Until we have an official table schema
+# We will store the row length as a constant
+ROW_LENGTH = 48
+require "byebug"
+
 class IO
   TAIL_BUF_LENGTH = 1 << 12 # Standard page size
   def last_line
@@ -28,6 +33,7 @@ def connect(table_name)
   file_path = "#{table_name}.csv"
   mode = File.exists?(file_path) ? "r+" : "w+"
   file = File.open(file_path, mode)
+  raise "Database Corrupt" if file.size() % ROW_LENGTH != 0
   $tables[table_name] = file
 end
 
@@ -35,25 +41,44 @@ def close()
   $tables.values.each { |file| file.close() }
 end
 
+def binary_search(file, match_id)
+  row_count = file.size() / ROW_LENGTH
+  i = 0
+  j = row_count - 1
+
+  while i <= j do
+    middle = (i + j) / 2
+    file_offset = middle * ROW_LENGTH
+    file.seek(file_offset, File::SEEK_SET)
+    row = file.read(ROW_LENGTH)
+    row_id = row[0...10].to_i
+
+    if row_id == match_id
+      return row
+    elsif row_id < match_id
+      i = middle + 1
+    else
+      j = middle - 1
+    end
+  end
+
+  return nil
+end
+
 def read(table, id)
   file = $tables[table]
-
-  file.seek(0, File::SEEK_SET)
-  raw_row = file
-    .readlines()
-    .detect { |row| row.split(",").first.to_i == id }
-
+  raw_row = binary_search(file, id)
   raw_row.nil? ? [] : deserialize(raw_row)
 end
 
 # For now, we assume that write does not include id
-def write(table, row, id=nil)
+def write(table, row)
   file = $tables[table]
 
   # By default, set the ID to the last index + 1
   # This can potentially re-use a deleted ID
   # But it cannot (yet) create two rows with the same ID
-  id ||= file.size() == 0 ?
+  id = file.size() == 0 ?
     1 :
     file.last_line.split(",").first.to_i + 1
 
@@ -68,15 +93,20 @@ end
 # For simplicity, we will completely re-write the table
 def delete(table, id)
   file = $tables[table]
+  raw_row = binary_search(file, id)
+  row_id = raw_row[0...10].to_i
 
-  file.seek(0, File::SEEK_SET)
-  new_lines = file
-    .readlines()
-    .reject  { |line| line.split(",", 2).first.to_i == id }
+  # Read the data after the current row
+  cur_size = file.size()
+  file_offset = row_id * ROW_LENGTH
+  file.seek(file_offset, File::SEEK_SET)
+  file_end = file.read(file.size() - file_offset)
 
-  file.seek(0, File::SEEK_SET)
-  bytes = file.write(new_lines.join(""))
-  file.truncate(bytes) # Shrink size of file to new bytes written
+  # Overwrite file starting at current row
+  file.seek((row_id - 1) * ROW_LENGTH, File::SEEK_SET)
+  file.write(file_end)
+
+  file.truncate(cur_size - ROW_LENGTH) # Shrink size of file by one row
 
   true
 end
@@ -97,8 +127,20 @@ end
 # Turn row to CSV
 def serialize(row)
   row
-    .map { |c| c.is_a?(String) ? quote(c) : c }
+    .map { |c| db_format(c) }
     .join(",")
+end
+
+def db_format(atom)
+  if atom.is_a?(Integer)
+    atom.to_s.rjust(10, "0")
+  elsif atom.is_a?(Float)
+    atom.round(4).to_s.rjust(15, "0")
+  elsif atom.is_a?(String)
+    "\"#{atom[0...18]}\"".ljust(20, " ")
+  else
+    raise "Unexpected Atom `#{atom}` of type `#{atom.class}`"
+  end
 end
 
 ### PARSER
@@ -112,8 +154,8 @@ def atom(str) # -> Mixed
       Float(str)
     rescue
       quotes = ["\"", "'"]
-      if quotes.include?(str[0]) && quotes.include?(str[-1])
-        str[1...-1]
+      if quotes.include?(str[0])
+        str[1...str.rindex(str[0])]
       else
         str.to_sym
       end

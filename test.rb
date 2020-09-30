@@ -1,7 +1,7 @@
 require_relative "naive-db.rb"
 
 def serialize_table(table)
-  test_data.map { |row| serialize(row) }.join("\n") + "\n"
+  table.map { |row| serialize(row) }.join("\n") + "\n"
 end
 
 describe "naive-db" do
@@ -17,10 +17,10 @@ describe "naive-db" do
 
   let(:test_data) do
     [
-      [1, "test", 100],
-      [2, "test", 200],
-      [3, "test", 300],
-      [4, "foo", 808],
+      [1, "test", 100.0],
+      [2, "test", 200.0],
+      [3, "test", 300.0],
+      [4, "foo", 808.0],
       [5, "foo", 25.50]
     ]
   end
@@ -79,25 +79,48 @@ describe "naive-db" do
     end
 
     context "DELETE" do
-      let(:query) { "DELETE FROM .test WHERE id = 3;" }
-      context "functions" do
-         let(:deleted_table) do
-           dup_data = test_data.dup
-           dup_data.delete_at(2)
-           dup_data
-         end
-         let(:deleted_data) { serialize_table(deleted_table) }
+      before(:each) do
+        parse_and_execute(query) # execute DELETE
+        close() # Sync file manipulations to the FS
+        connect(db_name) # Re-connect to observe effects
+      end
 
-         it "DELETS" do
-           close()
-           expect(File.read(db_fname)).to eq(deleted_data)
+      let(:query) { "DELETE FROM .test WHERE id = #{delete_pos};" }
+      context "functions" do
+        let(:deleted_table) do
+           dup_data = test_data.dup
+           dup_data.delete_at(delete_pos - 1)
+           dup_data
+        end
+        let(:deleted_data) { serialize_table(deleted_table) }
+
+        context "from middle" do
+          let(:delete_pos) { 3 }
+
+          it "DELETES" do
+            expect(File.read(db_fname)).to eq(deleted_data)
+          end
+        end
+
+        context "from beginning" do
+          let(:delete_pos) { 1 }
+          it "DELETES" do
+            expect(File.read(db_fname)).to eq(deleted_data)
+          end
+        end
+
+        context "from end" do
+          let(:delete_pos) { 5 }
+          it "DELETES" do
+            expect(File.read(db_fname)).to eq(deleted_data)
+          end
         end
       end
 
       context "persists" do
+        let(:delete_pos) { 3 }
         it "persists" do
-          subject
-          resp = parse_and_execute("SELECT * FROM .test WHERE id = 3;")
+          resp = parse_and_execute("SELECT * FROM .test WHERE id = #{delete_pos};")
           expect(resp).to eq([])
         end
       end
