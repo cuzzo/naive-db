@@ -37,21 +37,52 @@ describe "naive-db" do
       context "functions" do
         let(:query) { "SELECT * FROM .test WHERE id = 1;" }
         it "SELECTS" do
-          expect(subject).to eq(test_data[0])
+          expect(subject.first).to eq(test_data[0])
         end
       end
 
       context "negative ID" do
         let(:query) { "SELECT * FROM .test WHERE id = -2;" }
         it "fails gracefully" do
-          expect(subject).to eq([])
+          expect(subject).to eq([[]])
         end
       end
 
       context "non-existent ID" do
         let(:query) { "SELECT * FROM .test  WHERE id = 7;" }
         it "fails gracefully"  do
-          expect(subject).to eq([])
+          expect(subject).to eq([[]])
+        end
+      end
+
+      context "operators" do
+        context "<" do
+          let(:query) { "SELECT * FROM .test WHERE id < 7;" }
+          it "SELECTS all" do
+            expect(subject).to eq(test_data)
+          end
+        end
+
+        context ">" do
+          let(:query) { "SELECT * FROM .test WHERE id > 3;" }
+          it "SELECTS greater than" do
+            expect(subject).to eq(test_data[3..-1])
+          end
+        end
+
+        context "<>" do
+          let(:query) { "SELECT * FROM .test WHERE id <> 3;" }
+          it "SELECTS not equal" do
+            test_data.delete_at(2)
+            expect(subject).to eq(test_data)
+          end
+        end
+
+        context "=" do
+          let(:query) { "SELECT * FROM .test WHERE debit = 25.5" }
+          it "SELECTS other fields" do
+            expect(subject).to eq([test_data[4]])
+          end
         end
       end
     end
@@ -73,7 +104,7 @@ describe "naive-db" do
         it "persists" do
           subject
           resp = parse_and_execute("SELECT * FROM .test WHERE id = 6;")
-          expect(resp).to eq(inserted_row)
+          expect(resp.first).to eq(inserted_row)
         end
       end
     end
@@ -121,7 +152,7 @@ describe "naive-db" do
         let(:delete_pos) { 3 }
         it "persists" do
           resp = parse_and_execute("SELECT * FROM .test WHERE id = #{delete_pos};")
-          expect(resp).to eq([])
+          expect(resp).to eq([[]])
         end
       end
     end

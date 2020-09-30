@@ -10,7 +10,16 @@ $tables = {}
 # Until we have an official table schema
 # We will store the row length as a constant
 ROW_LENGTH = 48
-require "byebug"
+EQ = "=".to_sym
+SCHEMA = [:id, :name, :debit]
+OPERATOR_MAP = {
+  ">=".to_sym => ">=".to_sym,
+  "<=".to_sym => "<=".to_sym,
+  EQ => "==".to_sym,
+  "<>".to_sym => "!=".to_sym,
+  ">".to_sym => ">".to_sym,
+  "<".to_sym => "<".to_sym
+}
 
 class IO
   TAIL_BUF_LENGTH = 1 << 12 # Standard page size
@@ -65,10 +74,35 @@ def binary_search(file, match_id)
   return nil
 end
 
-def read(table, id)
+def read_by_id(table, id)
   file = $tables[table]
   raw_row = binary_search(file, id)
-  raw_row.nil? ? [] : deserialize(raw_row)
+  raw_row.nil? ? [[]] : [deserialize(raw_row)]
+end
+
+def read(table, where_clause)
+  file = $tables[table]
+
+  operator = OPERATOR_MAP[where_clause[1]]
+  raise "Unsupported Operator" if operator.nil?
+
+  lhs = where_clause.first
+  lhs_idx = lhs.is_a?(Symbol) ? SCHEMA.index(lhs) : nil
+
+  rhs = where_clause.last
+  rhs_idx =  rhs.is_a?(Symbol) ? SHCEMA.index(lhs) : nil
+
+  # general search is O(N), requirese searching entire dataset.
+  file.seek(0, File::SEEK_SET)
+  file
+    .readlines()
+    .reduce([]) do |acc, raw_row|
+      row = deserialize(raw_row)
+      lhs = lhs_idx.nil? ? lhs : row[lhs_idx]
+      rhs = rhs_idx.nil? ? rhs : row[rhs_idx]
+      acc << row if lhs.send(operator, rhs)
+      acc
+    end
 end
 
 # For now, we assume that write does not include id
@@ -171,12 +205,11 @@ def extract_table_name(query_str) # -> String
     .last
 end
 
-def extract_row_id(query_str) # -> Integer
+def extract_where_clause(query_str) # -> [lhs, opreator, rhs]
   query_str
-    .match(/WHERE\s+id\s*=\s*(\d+)/)
-    .to_a
-    .last
-    .to_i
+    .match(/WHERE\s+(-?[\d\w\.]+)\s*([<>=]{1,2})\s*(-?[\d\w.]+)/)
+    .to_a[1..-1]
+    .map { |part| atom(part) }
 end
 
 def extract_row(query_str) # -> Row
@@ -200,13 +233,21 @@ end
 def parse_and_execute(query_str) # -> Mixed
   table_name = extract_table_name(query_str)
 
-  case get_command(query_str)
-  when :select
-    row_id = extract_row_id(query_str)
-    read(table_name, row_id)
-  when :delete
-    row_id = extract_row_id(query_str)
-    delete(table_name, row_id)
+  cmd = get_command(query_str)
+  case cmd
+  when :select, :delete
+    where_clause = extract_where_clause(query_str)
+    if where_clause[1] == EQ && where_clause.include?(:id)
+      row_id = (where_clause - [EQ, :id]).first
+    else
+      return cmd == :select ?
+        read(table_name, where_clause) :
+        delete(table_name, where_clause)
+    end
+
+    cmd == :select ?
+      read_by_id(table_name, row_id) :
+      delete(table_name, row_id)
   when :insert
     row = extract_row(query_str)
     write(table_name, row)
